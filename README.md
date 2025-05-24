@@ -1,1 +1,655 @@
-# light-game2
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Luz Infinita</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+            border: 1px solid #333;
+        }
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            font-size: 20px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        #gameOver {
+            position: absolute;
+            color: #fff;
+            font-size: 40px;
+            text-align: center;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+        }
+        #gameOver button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        #gameOver button:hover {
+            background-color: #45a049;
+        }
+        #audioControls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: #fff;
+            font-size: 16px;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="hud">
+        <div>Distancia: <span id="distance">0</span> m</div>
+        <div>Vitalidad: <span id="vitality">100</span>%</div>
+    </div>
+    <div id="gameOver">
+        <h1>¡Juego Terminado!</h1>
+        <p>Distancia recorrida: <span id="finalDistance">0</span> m</p>
+        <button id="restartButton">Jugar de nuevo</button>
+    </div>
+    <div id="audioControls">🔊 Música: <span id="audioStatus">ON</span></div>
+
+    <script>
+        // Elementos del DOM
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const distanceDisplay = document.getElementById('distance');
+        const vitalityDisplay = document.getElementById('vitality');
+        const gameOverPanel = document.getElementById('gameOver');
+        const finalDistanceDisplay = document.getElementById('finalDistance');
+        const restartButton = document.getElementById('restartButton');
+        const audioControls = document.getElementById('audioControls');
+        const audioStatus = document.getElementById('audioStatus');
+
+        // Configurar tamaño del canvas
+        canvas.width = window.innerWidth * 0.8;
+        canvas.height = window.innerHeight * 0.8;
+
+        // Variables del juego
+        let gameActive = true;
+        let distance = 0;
+        let vitality = 100;
+        let speed = 2; // Velocidad inicial más baja
+        let maxSpeed = 15;
+        let acceleration = 0.001;
+        let lightFrequency = 0.02; // Frecuencia inicial más baja
+        let trackWidth = 300;
+        let player = {
+            x: canvas.width / 2,
+            y: canvas.height * 0.8,
+            radius: 20,
+            color: 'rgba(255, 255, 255, 1)',
+            brightness: 1.0
+        };
+        let lights = [];
+        let lastPos = { x: canvas.width / 2, y: canvas.height * 0.8 };
+        let direction = 0;
+        let moveLeft = false;
+        let moveRight = false;
+        let trackSpeed = 1; // Factor de velocidad visual de la pista
+        let lightSpeedFactor = 0.5; // Factor de velocidad inicial de las luces (más lento)
+
+        // Sistema de audio
+        let audioCtx = null;
+        let musicEnabled = true;
+        let musicTempo = 1.0; // Tempo inicial de la música
+        let oscillators = [];
+        let gainNodes = [];
+
+        // Función para generar un número aleatorio en un rango
+        function random(min, max) {
+            return Math.random() * (max - min) + min;
+        }
+
+        // Inicializar el sistema de audio
+        function initAudio() {
+            if (audioCtx === null) {
+                try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    createMusic();
+                } catch (e) {
+                    console.error("Web Audio API no soportada", e);
+                    musicEnabled = false;
+                    audioStatus.textContent = 'ERROR';
+                }
+            }
+        }
+
+        // Detener todos los osciladores actuales
+        function stopAllOscillators() {
+            oscillators.forEach(osc => {
+                try {
+                    osc.stop();
+                    osc.disconnect();
+                } catch (e) {
+                    // Ignorar errores si ya estaba detenido
+                }
+            });
+            gainNodes.forEach(gain => {
+                try {
+                    gain.disconnect();
+                } catch (e) {
+                    // Ignorar errores
+                }
+            });
+            oscillators = [];
+            gainNodes = [];
+        }
+
+        // Crear una melodía simple y repetitiva
+        function createMusic() {
+            if (!audioCtx || !musicEnabled) return;
+            
+            stopAllOscillators();
+            
+            // Definir notas (frecuencias en Hz)
+            const notes = [
+                261.63, // Do
+                293.66, // Re
+                329.63, // Mi
+                349.23, // Fa
+                392.00, // Sol
+                440.00, // La
+                493.88, // Si
+                523.25  // Do (octava superior)
+            ];
+            
+            // Secuencia de melodía simple
+            const melodySequence = [0, 2, 4, 7, 4, 2, 0, 2];
+            const bassSequence = [0, 0, 4, 4];
+            
+            // Duración de la nota base ajustada por el tempo actual
+            const getNoteDuration = () => 0.2 / musicTempo;
+            const getPauseDuration = () => 0.05 / musicTempo;
+            
+            // Crear la melodía
+            let currentTime = audioCtx.currentTime;
+            
+            // Función para tocar una nota
+            function playNote(frequency, startTime, duration, volume = 0.2) {
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                
+                oscillator.type = 'sine'; // Tipo de onda (sine, square, sawtooth, triangle)
+                oscillator.frequency.value = frequency;
+                
+                gainNode.gain.setValueAtTime(volume, startTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                
+                oscillator.start(startTime);
+                oscillator.stop(startTime + duration + 0.05);
+                
+                oscillators.push(oscillator);
+                gainNodes.push(gainNode);
+                
+                return startTime + duration + getPauseDuration();
+            }
+            
+            // Reproducir la melodía en bucle
+            function playMelodyLoop() {
+                if (!musicEnabled || !audioCtx) return;
+                
+                const noteDuration = getNoteDuration();
+                currentTime = audioCtx.currentTime;
+                
+                // Tocar la melodía
+                for (let i = 0; i < melodySequence.length; i++) {
+                    currentTime = playNote(notes[melodySequence[i]], 
+                                          currentTime, 
+                                          noteDuration);
+                }
+                
+                // Tocar el bajo (notas más graves)
+                currentTime = audioCtx.currentTime;
+                for (let i = 0; i < bassSequence.length; i++) {
+                    playNote(notes[bassSequence[i]] / 2, // Una octava más baja
+                             currentTime + i * (noteDuration * 2 + getPauseDuration()) * 2,
+                             noteDuration * 2,
+                             0.3);
+                }
+                
+                // Reproducir un pulso rítmico simple
+                const beatInterval = noteDuration * 2;
+                for (let i = 0; i < 8; i++) {
+                    const beatTime = audioCtx.currentTime + i * beatInterval / 2;
+                    const beatOsc = audioCtx.createOscillator();
+                    const beatGain = audioCtx.createGain();
+                    
+                    beatOsc.type = 'triangle';
+                    beatOsc.frequency.value = 180;
+                    
+                    beatGain.gain.setValueAtTime(i % 2 === 0 ? 0.15 : 0.05, beatTime);
+                    beatGain.gain.exponentialRampToValueAtTime(0.001, beatTime + 0.1);
+                    
+                    beatOsc.connect(beatGain);
+                    beatGain.connect(audioCtx.destination);
+                    
+                    beatOsc.start(beatTime);
+                    beatOsc.stop(beatTime + 0.1);
+                    
+                    oscillators.push(beatOsc);
+                    gainNodes.push(beatGain);
+                }
+                
+                // Programar la siguiente repetición
+                setTimeout(() => {
+                    // Actualizar el tempo según la velocidad del juego
+                    musicTempo = 1.0 + (speed / maxSpeed) * 1.5;
+                    playMelodyLoop();
+                }, (noteDuration + getPauseDuration()) * melodySequence.length * 1000);
+            }
+            
+            // Iniciar el bucle de melodía
+            playMelodyLoop();
+        }
+
+        // Inicializar el juego
+        function initGame() {
+            gameActive = true;
+            distance = 0;
+            vitality = 100;
+            speed = 2; // Velocidad inicial más baja
+            lightSpeedFactor = 0.5; // Factor de velocidad inicial de las luces
+            trackSpeed = 1;
+            musicTempo = 1.0;
+            lights = [];
+            player.brightness = 1.0;
+            player.x = canvas.width / 2;
+            player.y = canvas.height * 0.8;
+            lastPos = { x: canvas.width / 2, y: canvas.height * 0.8 };
+            direction = 0;
+            gameOverPanel.style.display = 'none';
+            
+            // Reiniciar música si está habilitada
+            if (musicEnabled) {
+                initAudio();
+            }
+            
+            animate();
+        }
+
+        // Control de música
+        audioControls.addEventListener('click', function() {
+            musicEnabled = !musicEnabled;
+            audioStatus.textContent = musicEnabled ? 'ON' : 'OFF';
+            
+            if (musicEnabled) {
+                initAudio();
+            } else {
+                stopAllOscillators();
+            }
+        });
+
+        // Controles táctiles para dispositivos móviles
+        canvas.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            if (touch.pageX < canvas.width / 2) {
+                moveLeft = true;
+                moveRight = false;
+            } else {
+                moveLeft = false;
+                moveRight = true;
+            }
+            
+            // Iniciar audio con la interacción
+            if (musicEnabled) {
+                initAudio();
+            }
+        });
+
+        canvas.addEventListener('touchend', function(e) {
+            e.preventDefault();
+            moveLeft = false;
+            moveRight = false;
+        });
+
+        // Controles de teclado
+        window.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowLeft' || e.key === 'a') {
+                moveLeft = true;
+            }
+            if (e.key === 'ArrowRight' || e.key === 'd') {
+                moveRight = true;
+            }
+            
+            // Iniciar audio con la interacción
+            if (musicEnabled) {
+                initAudio();
+            }
+        });
+
+        window.addEventListener('keyup', function(e) {
+            if (e.key === 'ArrowLeft' || e.key === 'a') {
+                moveLeft = false;
+            }
+            if (e.key === 'ArrowRight' || e.key === 'd') {
+                moveRight = false;
+            }
+        });
+
+        // Botón de reinicio
+        restartButton.addEventListener('click', function() {
+            if (musicEnabled) {
+                initAudio();
+            }
+            initGame();
+        });
+
+        // Clic en el canvas para iniciar
+        canvas.addEventListener('click', function() {
+            if (!gameActive) {
+                initGame();
+            }
+            
+            // Iniciar audio con la interacción
+            if (musicEnabled) {
+                initAudio();
+            }
+        });
+
+        // Resize del canvas cuando cambia el tamaño de la ventana
+        window.addEventListener('resize', function() {
+            canvas.width = window.innerWidth * 0.8;
+            canvas.height = window.innerHeight * 0.8;
+            player.x = canvas.width / 2;
+            player.y = canvas.height * 0.8;
+        });
+
+        // Crear luces nuevas
+        function createLight() {
+            // Reducir la frecuencia al inicio y aumentarla gradualmente
+            if (Math.random() < lightFrequency) {
+                const light = {
+                    x: random(canvas.width / 2 - trackWidth / 2 + 20, canvas.width / 2 + trackWidth / 2 - 20),
+                    y: -50,
+                    radius: random(5, 15),
+                    color: `hsl(${random(0, 360)}, 100%, 70%)`,
+                    speed: speed * lightSpeedFactor * random(0.8, 1.0) // Velocidad de luces más lenta
+                };
+                lights.push(light);
+            }
+        }
+
+        // Actualizar posición de las luces
+        function updateLights() {
+            for (let i = 0; i < lights.length; i++) {
+                lights[i].y += lights[i].speed;
+                
+                // Comprobar colisión con el jugador
+                const dx = lights[i].x - player.x;
+                const dy = lights[i].y - player.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < player.radius + lights[i].radius) {
+                    // Consumir luz
+                    vitality = Math.min(vitality + 5, 100);
+                    player.brightness = Math.min(player.brightness + 0.1, 1.0);
+                    lights.splice(i, 1);
+                    i--;
+                } else if (lights[i].y > canvas.height + 50) {
+                    // Eliminar luces fuera de pantalla
+                    lights.splice(i, 1);
+                    i--;
+                }
+            }
+        }
+
+        // Dibujar la pista
+        function drawTrack() {
+            // Líneas de los bordes de la pista
+            ctx.strokeStyle = 'rgba(100, 100, 255, 0.5)';
+            ctx.lineWidth = 3;
+            
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2 - trackWidth / 2, 0);
+            ctx.lineTo(canvas.width / 2 - trackWidth / 2, canvas.height);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2 + trackWidth / 2, 0);
+            ctx.lineTo(canvas.width / 2 + trackWidth / 2, canvas.height);
+            ctx.stroke();
+            
+            // Líneas divisorias de la pista (efecto de velocidad mejorado)
+            const lineCount = 30; // Más líneas
+            const lineHeight = 40;
+            const lineGap = 60;
+            
+            ctx.strokeStyle = 'rgba(100, 100, 255, 0.3)';
+            ctx.lineWidth = 2;
+            
+            for (let i = 0; i < lineCount; i++) {
+                // Hacer que el efecto de velocidad sea más pronunciado
+                const y = (i * (lineHeight + lineGap) + distance * speed * trackSpeed) % (canvas.height + lineHeight + lineGap) - lineHeight;
+                
+                // Lineas centrales
+                ctx.beginPath();
+                ctx.moveTo(canvas.width / 2 - trackWidth / 4, y);
+                ctx.lineTo(canvas.width / 2 - trackWidth / 4, y + lineHeight);
+                ctx.stroke();
+                
+                ctx.beginPath();
+                ctx.moveTo(canvas.width / 2 + trackWidth / 4, y);
+                ctx.lineTo(canvas.width / 2 + trackWidth / 4, y + lineHeight);
+                ctx.stroke();
+                
+                // Añadir líneas adicionales para dar más sensación de velocidad
+                ctx.beginPath();
+                ctx.moveTo(canvas.width / 2, y);
+                ctx.lineTo(canvas.width / 2, y + lineHeight);
+                ctx.stroke();
+                
+                // Líneas laterales
+                const lateralOpacity = Math.max(0.1, 0.3 - (speed / maxSpeed) * 0.2);
+                ctx.strokeStyle = `rgba(100, 100, 255, ${lateralOpacity})`;
+                
+                for (let j = 1; j <= 3; j++) {
+                    const spacing = trackWidth / 10;
+                    
+                    // Líneas laterales izquierda
+                    ctx.beginPath();
+                    ctx.moveTo(canvas.width / 2 - trackWidth / 2 + spacing * j, y - 20);
+                    ctx.lineTo(canvas.width / 2 - trackWidth / 2 + spacing * j, y + lineHeight + 20);
+                    ctx.stroke();
+                    
+                    // Líneas laterales derecha
+                    ctx.beginPath();
+                    ctx.moveTo(canvas.width / 2 + trackWidth / 2 - spacing * j, y - 20);
+                    ctx.lineTo(canvas.width / 2 + trackWidth / 2 - spacing * j, y + lineHeight + 20);
+                    ctx.stroke();
+                }
+            }
+            
+            // Efecto de perspectiva
+            const gradientHeight = canvas.height * 0.6;
+            const gradient = ctx.createLinearGradient(0, canvas.height - gradientHeight, 0, canvas.height);
+            gradient.addColorStop(0, 'rgba(0, 0, 50, 0)');
+            gradient.addColorStop(1, 'rgba(0, 0, 50, 0.2)');
+            
+            ctx.fillStyle = gradient;
+            ctx.fillRect(canvas.width / 2 - trackWidth / 2, canvas.height - gradientHeight, trackWidth, gradientHeight);
+        }
+
+        // Dibujar el rastro de la pelota
+        function drawTrail() {
+            ctx.beginPath();
+            ctx.moveTo(lastPos.x, lastPos.y);
+            ctx.lineTo(player.x, player.y);
+            ctx.strokeStyle = `rgba(255, 255, 255, ${player.brightness * 0.5})`;
+            ctx.lineWidth = player.radius * 1.2;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+        }
+
+        // Dibujar la pelota del jugador
+        function drawPlayer() {
+            // Efecto de resplandor
+            const gradient = ctx.createRadialGradient(
+                player.x, player.y, 0,
+                player.x, player.y, player.radius * 3
+            );
+            gradient.addColorStop(0, `rgba(255, 255, 255, ${player.brightness})`);
+            gradient.addColorStop(0.5, `rgba(200, 200, 255, ${player.brightness * 0.5})`);
+            gradient.addColorStop(1, 'rgba(100, 100, 255, 0)');
+            
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius * 3, 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            
+            // Núcleo de la pelota
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255, 255, 255, ${player.brightness})`;
+            ctx.fill();
+        }
+
+        // Dibujar luces en el camino
+        function drawLights() {
+            for (const light of lights) {
+                // Efecto de resplandor
+                const gradient = ctx.createRadialGradient(
+                    light.x, light.y, 0,
+                    light.x, light.y, light.radius * 3
+                );
+                gradient.addColorStop(0, light.color);
+                gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                
+                ctx.beginPath();
+                ctx.arc(light.x, light.y, light.radius * 3, 0, Math.PI * 2);
+                ctx.fillStyle = gradient;
+                ctx.fill();
+                
+                // Núcleo de la luz
+                ctx.beginPath();
+                ctx.arc(light.x, light.y, light.radius, 0, Math.PI * 2);
+                ctx.fillStyle = light.color;
+                ctx.fill();
+            }
+        }
+
+        // Actualizar la lógica del juego
+        function update() {
+            if (!gameActive) return;
+            
+            // Actualizar el contador de distancia
+            distance += speed / 100;
+            distanceDisplay.textContent = Math.floor(distance);
+            
+            // Aumentar velocidad gradualmente
+            speed = Math.min(speed + acceleration, maxSpeed);
+            
+            // Aumentar la sensación de velocidad visual de la pista
+            trackSpeed = 1 + (speed / maxSpeed) * 3;
+            
+            // Actualizar el tempo de la música según la velocidad
+            musicTempo = 1.0 + (speed / maxSpeed) * 1.5;
+            
+            // Aumentar gradualmente la velocidad de las luces según la distancia
+            lightSpeedFactor = 0.5 + Math.min(0.7, distance / 1000);
+            
+            // Disminuir vitalidad con el tiempo (más lentamente al inicio)
+            vitality -= 0.03 + (speed / maxSpeed) * 0.08;
+            player.brightness = vitality / 100;
+            vitalityDisplay.textContent = Math.max(0, Math.floor(vitality));
+            
+            // Aumentar dificultad con la distancia
+            lightFrequency = 0.02 + Math.min(0.06, (distance / 1000) * 0.02);
+            trackWidth = Math.max(200, 300 - (distance / 500) * 50);
+            
+            // Game Over cuando la vitalidad llega a cero
+            if (vitality <= 0) {
+                gameOver();
+                return;
+            }
+            
+            // Guardar posición anterior para el rastro
+            lastPos = { x: player.x, y: player.y };
+            
+            // Controles de movimiento
+            const moveSpeed = 5 + (speed / 5);
+            
+            if (moveLeft) {
+                direction = -1;
+                player.x = Math.max(player.x - moveSpeed, canvas.width / 2 - trackWidth / 2 + player.radius);
+            } else if (moveRight) {
+                direction = 1;
+                player.x = Math.min(player.x + moveSpeed, canvas.width / 2 + trackWidth / 2 - player.radius);
+            } else {
+                direction = 0;
+            }
+            
+            // Crear nuevas luces
+            createLight();
+            
+            // Actualizar luces existentes
+            updateLights();
+        }
+
+        // Terminar el juego
+        function gameOver() {
+            gameActive = false;
+            finalDistanceDisplay.textContent = Math.floor(distance);
+            gameOverPanel.style.display = 'block';
+            
+            // Detener música al terminar
+            stopAllOscillators();
+        }
+
+        // Función principal de animación
+        function animate() {
+            if (!gameActive) return;
+            
+            // Limpiar el canvas
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Actualizar lógica
+            update();
+            
+            // Dibujar elementos
+            drawTrack();
+            drawTrail();
+            drawLights();
+            drawPlayer();
+            
+            // Continuar animación
+            requestAnimationFrame(animate);
+        }
+
+        // Iniciar el juego
+        initGame();
+    </script>
+</body>
+</html>
